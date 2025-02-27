@@ -1,0 +1,4 @@
+﻿LOGFile:C:\TEST\
+sourceDir:C:\TEST\SOURCE\
+destinationDir:C:\TEST\DEST
+MaxCopiesAllowed:4
