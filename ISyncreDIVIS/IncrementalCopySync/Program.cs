@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace MyApp
 {
@@ -11,7 +12,7 @@ namespace MyApp
         private static double pocetZkopirovanych = 0;
         private static double pocetStejnych = 0;
 
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             var (sourceDir, destinationDir, NumbCopiesAllowed, LOGFile) = sourceDirectory();
 
@@ -36,14 +37,14 @@ namespace MyApp
                 return;
             }
 
-            CopyAndCompareFiles(sourceDir, destinationDir, LOGFile);
-            
-            File.AppendAllText(LOGFile, $"Number of copied files: {pocetZkopirovanych}, Number of same files {pocetStejnych}. " + DateTime.Now.ToString() + Environment.NewLine);
+            await CopyAndCompareFilesAsync(sourceDir, destinationDir, LOGFile);
+
+            await File.AppendAllTextAsync(LOGFile, $"Number of copied files: {pocetZkopirovanych}, Number of same files {pocetStejnych}. {DateTime.Now}{Environment.NewLine}");
 
             Console.WriteLine("Operation completed successfully.");
         }
 
-        static void CopyAndCompareFiles(string sourceDir, string destinationDir, string LOGFile)
+        static async Task CopyAndCompareFilesAsync(string sourceDir, string destinationDir, string LOGFile)
         {
             Directory.CreateDirectory(destinationDir);
 
@@ -64,91 +65,138 @@ namespace MyApp
                     {
                         string newFileName = GetUniqueFileName(destinationDir, baseName, extension);
                         string newDestFilePath = Path.Combine(destinationDir, newFileName);
-                        File.Copy(filePath, newDestFilePath, true);
+                        await CopyAsync(filePath, newDestFilePath, LOGFile);
                         Console.WriteLine($"Newer file copied with name: {newFileName}");
-                        File.AppendAllText(LOGFile, $"Newer file copied with name: {newFileName} "+ DateTime.Now.ToString() + Environment.NewLine);
+                        await File.AppendAllTextAsync(LOGFile, $"Newer file copied with name: {newFileName} {DateTime.Now}{Environment.NewLine}");
                         ManageFileCopies(destinationDir, baseName, extension);
                         pocetZkopirovanych++;
                     }
                     else
                     {
                         Console.WriteLine($"No action taken for {fileName}. Destination has the latest version.");
-                        File.AppendAllText(LOGFile, $"No action taken for {fileName}. Destination has the latest version. " + DateTime.Now.ToString() + Environment.NewLine);
+                        await File.AppendAllTextAsync(LOGFile, $"No action taken for {fileName}. Destination has the latest version. {DateTime.Now}{Environment.NewLine}");
                         pocetStejnych++;
                     }
                 }
                 else
                 {
                     string destFilePath = Path.Combine(destinationDir, fileName);
-                    File.Copy(filePath, destFilePath, true);
+                    await CopyAsync(filePath, destFilePath, LOGFile);
                     Console.WriteLine($"File copied: {fileName}");
                 }
             }
-             
+
             foreach (string dirPath in Directory.GetDirectories(sourceDir))
             {
                 string destDirPath = Path.Combine(destinationDir, Path.GetFileName(dirPath));
-                CopyAndCompareFiles(dirPath, destDirPath, LOGFile);
+                await CopyAndCompareFilesAsync(dirPath, destDirPath, LOGFile);
+            }
+        }
+
+        static async Task CopyAsync(string sourceFilePath, string destinationFilePath, string LOGFile)
+        {
+            try
+            {
+                const int bufferSize = 81920; // 80 KB buffer size
+                using (FileStream sourceStream = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, useAsync: true))
+                using (FileStream destinationStream = new FileStream(destinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, useAsync: true))
+                {
+                    await sourceStream.CopyToAsync(destinationStream);
+                }
+            }
+            catch (Exception ex)
+            {
+                string log = $"Error copying file: {ex.Message}";
+                await File.AppendAllTextAsync(LOGFile, log + Environment.NewLine);
             }
         }
 
         static FileInfo? GetMostRecentFile(string directory, string baseName, string extension)
         {
-            var matchingFiles = Directory.GetFiles(directory, $"{baseName}-*{extension}")
-                .Select(file => new FileInfo(file))
-                .OrderByDescending(file => file.LastWriteTime)
-                .ToList();
-
-            string originalFile = Path.Combine(directory, $"{baseName}{extension}");
-            if (File.Exists(originalFile))
+            try
             {
-                matchingFiles.Add(new FileInfo(originalFile));
-                matchingFiles = matchingFiles.OrderByDescending(file => file.LastWriteTime).ToList();
-            }
+                var matchingFiles = Directory.GetFiles(directory, $"{baseName}-*{extension}")
+                    .Select(file => new FileInfo(file))
+                    .OrderByDescending(file => file.LastWriteTime)
+                    .ToList();
 
-            return matchingFiles.FirstOrDefault();
+                string originalFile = Path.Combine(directory, $"{baseName}{extension}");
+                if (File.Exists(originalFile))
+                {
+                    matchingFiles.Add(new FileInfo(originalFile));
+                    matchingFiles = matchingFiles.OrderByDescending(file => file.LastWriteTime).ToList();
+                }
+
+                return matchingFiles.FirstOrDefault();
+            }
+            catch (Exception ex)
+            {
+                string log = $"Error in GetMostRecentFile: {ex.Message}";
+                var (sourceDir, destinationDir, NumbCopiesAllowed, LOGFile) = sourceDirectory();
+                File.AppendAllText(LOGFile, log + Environment.NewLine);
+                return null;
+            }
         }
 
         static string GetUniqueFileName(string directory, string baseName, string extension)
         {
-            int index = 1;
-            string newFileName;
-            do
+            try
             {
-                newFileName = $"{baseName}-{index}{extension}";
-                index++;
-            } while (File.Exists(Path.Combine(directory, newFileName)));
-            return newFileName;
+                int index = 1;
+                string newFileName;
+                do
+                {
+                    newFileName = $"{baseName}-{index}{extension}";
+                    index++;
+                } while (File.Exists(Path.Combine(directory, newFileName)));
+                return newFileName;
+            }
+            catch (Exception ex)
+            {
+                string log = $"Error in GetUniqueFileName: {ex.Message}";
+                var (sourceDir, destinationDir, NumbCopiesAllowed, LOGFile) = sourceDirectory();
+                File.AppendAllText(LOGFile, log + Environment.NewLine);
+                return "";
+            }
         }
 
         static void ManageFileCopies(string directory, string baseName, string extension)
         {
-            var matchingFiles = Directory.GetFiles(directory, $"{baseName}-*{extension}")
-                .Select(file => new FileInfo(file))
-                .OrderByDescending(file => file.LastWriteTime)
-                .ToList();
-
-            string originalFile = Path.Combine(directory, $"{baseName}{extension}");
-            if (File.Exists(originalFile))
+            try
             {
-                matchingFiles.Add(new FileInfo(originalFile));
-                matchingFiles = matchingFiles.OrderByDescending(file => file.LastWriteTime).ToList();
+                var matchingFiles = Directory.GetFiles(directory, $"{baseName}-*{extension}")
+                    .Select(file => new FileInfo(file))
+                    .OrderByDescending(file => file.LastWriteTime)
+                    .ToList();
+
+                string originalFile = Path.Combine(directory, $"{baseName}{extension}");
+                if (File.Exists(originalFile))
+                {
+                    matchingFiles.Add(new FileInfo(originalFile));
+                    matchingFiles = matchingFiles.OrderByDescending(file => file.LastWriteTime).ToList();
+                }
+
+                while (matchingFiles.Count > MaxCopiesAllowed)
+                {
+                    var oldestFile = matchingFiles.Last();
+                    Console.WriteLine($"Deleting old file: {oldestFile.Name}");
+                    oldestFile.Delete();
+                    matchingFiles.RemoveAt(matchingFiles.Count - 1);
+                }
             }
-
-            while (matchingFiles.Count > MaxCopiesAllowed)
+            catch (Exception ex)
             {
-                var oldestFile = matchingFiles.Last();
-                Console.WriteLine($"Deleting old file: {oldestFile.Name}");
-                oldestFile.Delete();
-                matchingFiles.RemoveAt(matchingFiles.Count - 1);
+                string log = $"Error in ManageFileCopies: {ex.Message}";
+                var (sourceDir, destinationDir, NumbCopiesAllowed, LOGFile) = sourceDirectory();
+                File.AppendAllText(LOGFile, log + Environment.NewLine);
             }
         }
 
         static (string, string, string, string) sourceDirectory()
         {
             string baseDirectory = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            //string relativePath = Path.Combine(baseDirectory, @"..\..\..\Configuration\Configuration.txt"); //IDE
             string relativePath = Path.Combine(baseDirectory, @"Configuration\Configuration.txt"); //published
+            //string relativePath = Path.Combine(baseDirectory, @"..\..\..\Configuration\Configuration.txt"); //IDE
             string absolutePath = Path.GetFullPath(relativePath);
             string sourceDir = "";
             string destinationDir = "";
@@ -163,39 +211,40 @@ namespace MyApp
                     if (line.StartsWith("LOGFile:"))
                     {
                         LOGFile = line.Substring("LOGFile:".Length).Trim();
-                        Console.WriteLine("LogFile Directory is: " + LOGFile);
-                        TextWriter tw = new StreamWriter(LOGFile + DateOnly.FromDateTime(DateTime.Now).ToString("o", CultureInfo.InvariantCulture) + ".log");
-                        LOGFile += DateOnly.FromDateTime(DateTime.Now).ToString("o", CultureInfo.InvariantCulture) + ".log";
-                        tw.Close();
-                        File.AppendAllText(LOGFile, $"LOGFile Created;" + DateTime.Now.ToString() + Environment.NewLine);
+                        Console.WriteLine($"LogFile Directory is: {LOGFile}");
+                        using (TextWriter tw = new StreamWriter(LOGFile + DateOnly.FromDateTime(DateTime.Now).ToString("o", CultureInfo.InvariantCulture) + ".log"))
+                        {
+                            LOGFile += DateOnly.FromDateTime(DateTime.Now).ToString("o", CultureInfo.InvariantCulture) + ".log";
+                        }
+                        File.AppendAllText(LOGFile, $"LOGFile Created; {DateTime.Now}{Environment.NewLine}");
                     }
 
                     if (line.StartsWith("sourceDir:"))
                     {
                         sourceDir = line.Substring("sourceDir:".Length).Trim();
-                        Console.WriteLine("Source Directory Path: " + sourceDir);
-                        File.AppendAllText(LOGFile, $"Source Directory is {sourceDir}" + DateTime.Now.ToString() + Environment.NewLine);
+                        Console.WriteLine($"Source Directory Path: {sourceDir}");
+                        File.AppendAllText(LOGFile, $"Source Directory is {sourceDir} {DateTime.Now}{Environment.NewLine}");
                     }
 
                     if (line.StartsWith("destinationDir:"))
                     {
                         destinationDir = line.Substring("destinationDir:".Length).Trim();
-                        Console.WriteLine("Destination Directory Path: " + destinationDir);
-                        File.AppendAllText(LOGFile, $"Destination directory is {destinationDir}" + DateTime.Now.ToString() + Environment.NewLine);
+                        Console.WriteLine($"Destination Directory Path: {destinationDir}");
+                        File.AppendAllText(LOGFile, $"Destination directory is {destinationDir} {DateTime.Now}{Environment.NewLine}");
                     }
 
                     if (line.StartsWith("MaxCopiesAllowed:"))
                     {
                         MaxCopiesAllowed = line.Substring("MaxCopiesAllowed:".Length).Trim();
-                        Console.WriteLine("Number of allowed copies is: " + MaxCopiesAllowed);
-                        File.AppendAllText(LOGFile, $"Number of allowed copies is: {MaxCopiesAllowed}" + DateTime.Now.ToString() + Environment.NewLine);
+                        Console.WriteLine($"Number of allowed copies is: {MaxCopiesAllowed}");
+                        File.AppendAllText(LOGFile, $"Number of allowed copies is: {MaxCopiesAllowed} {DateTime.Now}{Environment.NewLine}");
                     }
 
                 }
             }
             else
             {
-                Console.WriteLine("File not found: " + absolutePath);
+                Console.WriteLine($"File not found: {absolutePath}");
             }
 
             return (sourceDir, destinationDir, MaxCopiesAllowed, LOGFile);
